@@ -16,73 +16,163 @@ import smtplib
 from typing import List, Dict
 
 # Configuration
-NOTION_API_KEY = os.getenv('NOTION_API_KEY', '')
-NOTION_DATABASE_ID = "a91dd97aa92b4d239293810d4700bdc8"
-EMAIL_FROM = os.getenv('EMAIL_FROM', '')
-EMAIL_TO = os.getenv('EMAIL_TO', '')
-EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
-SMTP_SERVER = os.getenv('SMTP_SERVER', 'smtp.gmail.com')
-SMTP_PORT = 587
+NOTION_API_KEY = os.getenv('NOTION_API_KEY', '').strip()
+NOTION_DATABASE_ID = "a91dd97aa92b4d239293810d4700bdc8"  # ID de votre base "Veille Technologique Hebdomadaire"
+EMAIL_FROM = os.getenv('EMAIL_FROM', '').strip()
+EMAIL_TO = os.getenv('EMAIL_TO', '').strip()
+EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '').strip()
+SMTP_SERVER = os.getenv('SMTP_SERVER', '').strip() or 'smtp.gmail.com'
 
-# Sources RSS par catégorie
+# Gestion sécurisée du port SMTP
+smtp_port_str = os.getenv('SMTP_PORT', '587').strip()
+if not smtp_port_str:  # Si vide ou None
+    smtp_port_str = '587'
+try:
+    SMTP_PORT = int(smtp_port_str)
+except (ValueError, AttributeError, TypeError):
+    print("⚠️  SMTP_PORT invalide, utilisation du port par défaut 587")
+    SMTP_PORT = 587
+
+# Sources RSS par catégorie et langue
 RSS_FEEDS = {
-    "Full Stack": [
-        "https://dev.to/feed",
-        "https://daily.dev/blog/rss.xml",
-        "https://web.dev/feed.xml",
-        "https://css-tricks.com/feed/",
-    ],
-    "IA/ML": [
-        "https://huggingface.co/blog/feed.xml",
-        "https://blog.tensorflow.org/feeds/posts/default",
-        "https://openai.com/blog/rss/",
-        "https://www.deeplearning.ai/the-batch/feed/",
-    ],
-    "Cloud": [
-        "https://aws.amazon.com/blogs/aws/feed/",
-        "https://azure.microsoft.com/en-us/blog/feed/",
-        "https://cloud.google.com/blog/rss",
-        "https://www.infoq.com/cloud-computing/rss/",
-    ],
-    "DevSecOps": [
-        "https://www.docker.com/blog/feed/",
-        "https://kubernetes.io/feed.xml",
-        "https://owasp.org/blog/feed.xml",
-        "https://github.blog/feed/",
-    ]
+    "Full Stack": {
+        "fr": [
+            "https://www.blogdumoderateur.com/feed/",
+            "https://grafikart.fr/feed",
+            "https://korben.info/feed",
+            "https://blog.zenika.com/feed/",
+        ],
+        "en": [
+            "https://dev.to/feed",
+            "https://web.dev/feed.xml",
+        ]
+    },
+    "IA/ML": {
+        "fr": [
+            "https://www.actuia.com/feed/",
+            "https://www.lemondeinformatique.fr/flux-rss/thematique/intelligence-artificielle/rss.xml",
+        ],
+        "en": [
+            "https://huggingface.co/blog/feed.xml",
+            "https://openai.com/blog/rss/",
+        ]
+    },
+    "Cloud": {
+        "fr": [
+            "https://www.lemagit.fr/rss/Cloud-Computing.xml",
+            "https://blog.scaleway.com/fr/feed/",
+        ],
+        "en": [
+            "https://aws.amazon.com/blogs/aws/feed/",
+            "https://cloud.google.com/blog/rss",
+        ]
+    },
+    "DevSecOps": {
+        "fr": [
+            "https://www.silicon.fr/feed",
+            "https://www.undernews.fr/feed",
+        ],
+        "en": [
+            "https://www.docker.com/blog/feed/",
+            "https://kubernetes.io/feed.xml",
+        ]
+    }
+}
+
+# Mots-clés pour filtrer les articles anglais importants
+IMPORTANT_KEYWORDS = {
+    "IA/ML": ["gpt", "llama", "claude", "mistral", "gemini", "training", "fine-tuning", "transformer"],
+    "Cloud": ["aws", "azure", "gcp", "kubernetes", "lambda", "serverless", "terraform"],
+    "DevSecOps": ["security", "vulnerability", "cve", "docker", "kubernetes", "ci/cd"],
+    "Full Stack": ["react 19", "vue 3", "angular", "next.js", "typescript 5", "node.js"]
 }
 
 
-def fetch_rss_articles(category: str, feed_urls: List[str], max_age_days: int = 7) -> List[Dict]:
-    """Récupère les articles récents depuis les flux RSS"""
+def detect_language(text: str) -> str:
+    """Détecte la langue d'un texte (simple heuristique)"""
+    if not text:
+        return "unknown"
+    
+    # Mots français courants
+    french_words = ["le", "la", "les", "un", "une", "des", "et", "est", "dans", "pour", "sur", "avec", "par", "plus", "comment", "pourquoi"]
+    # Mots anglais courants
+    english_words = ["the", "a", "an", "and", "is", "in", "for", "on", "with", "by", "how", "why", "what"]
+    
+    text_lower = text.lower()
+    
+    french_count = sum(1 for word in french_words if f" {word} " in text_lower)
+    english_count = sum(1 for word in english_words if f" {word} " in text_lower)
+    
+    if french_count > english_count:
+        return "fr"
+    elif english_count > french_count:
+        return "en"
+    else:
+        return "unknown"
+
+
+def is_important_english_article(title: str, summary: str, category: str) -> bool:
+    """Vérifie si un article anglais contient des mots-clés importants"""
+    text = (title + " " + summary).lower()
+    keywords = IMPORTANT_KEYWORDS.get(category, [])
+    
+    return any(keyword.lower() in text for keyword in keywords)
+
+
+def fetch_rss_articles(category: str, feed_urls: Dict[str, List[str]], max_age_days: int = 7) -> List[Dict]:
+    """Récupère les articles récents depuis les flux RSS avec gestion de la langue"""
     articles = []
     cutoff_date = datetime.now() - timedelta(days=max_age_days)
     
-    for feed_url in feed_urls:
-        try:
-            feed = feedparser.parse(feed_url)
-            source_name = feed.feed.get('title', feed_url)
-            
-            for entry in feed.entries[:5]:  # Limite à 5 articles par source
-                published = entry.get('published_parsed') or entry.get('updated_parsed')
-                if published:
-                    pub_date = datetime(*published[:6])
-                    if pub_date < cutoff_date:
-                        continue
-                
-                article = {
-                    "title": entry.get('title', 'Sans titre'),
-                    "url": entry.get('link', ''),
-                    "summary": entry.get('summary', '')[:300],  # Limite à 300 caractères
-                    "source": source_name,
-                    "category": category,
-                    "date": datetime.now().isoformat()[:10]
-                }
-                articles.append(article)
-                
-        except Exception as e:
-            print(f"Erreur lors de la récupération de {feed_url}: {e}")
+    # Traiter d'abord les sources françaises
+    for lang in ["fr", "en"]:
+        if lang not in feed_urls:
             continue
+            
+        for feed_url in feed_urls[lang]:
+            try:
+                feed = feedparser.parse(feed_url)
+                source_name = feed.feed.get('title', feed_url)
+                
+                for entry in feed.entries[:5]:  # Limite à 5 articles par source
+                    published = entry.get('published_parsed') or entry.get('updated_parsed')
+                    if published:
+                        pub_date = datetime(*published[:6])
+                        if pub_date < cutoff_date:
+                            continue
+                    
+                    title = entry.get('title', 'Sans titre')
+                    summary = entry.get('summary', '')
+                    
+                    # Détecter la langue
+                    detected_lang = detect_language(title + " " + summary)
+                    
+                    # Si c'est anglais, vérifier l'importance
+                    if detected_lang == "en" and lang == "en":
+                        if not is_important_english_article(title, summary, category):
+                            print(f"   ⏭️  Article anglais filtré (non prioritaire): {title[:50]}...")
+                            continue
+                    
+                    # Emoji selon la langue
+                    lang_emoji = "🇫🇷" if detected_lang == "fr" else "🇬🇧" if detected_lang == "en" else "🌐"
+                    
+                    article = {
+                        "title": f"{lang_emoji} {title}",
+                        "url": entry.get('link', ''),
+                        "summary": summary[:300],  # Limite à 300 caractères
+                        "source": source_name,
+                        "category": category,
+                        "date": datetime.now().isoformat()[:10],
+                        "language": detected_lang
+                    }
+                    articles.append(article)
+                    
+            except Exception as e:
+                print(f"Erreur lors de la récupération de {feed_url}: {e}")
+                continue
+    
+    # Trier : français en premier
+    articles.sort(key=lambda x: (x.get('language') != 'fr', x.get('title', '')))
     
     return articles
 
