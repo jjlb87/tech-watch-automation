@@ -17,7 +17,7 @@ from typing import List, Dict
 
 # Configuration
 NOTION_API_KEY = os.getenv('NOTION_API_KEY', '')
-NOTION_DATABASE_ID = "04e8ee4a-9d2a-4830-9086-4ab02669a118"
+NOTION_DATABASE_ID = "a91dd97aa92b4d239293810d4700bdc8"
 EMAIL_FROM = os.getenv('EMAIL_FROM', '')
 EMAIL_TO = os.getenv('EMAIL_TO', '')
 EMAIL_PASSWORD = os.getenv('EMAIL_PASSWORD', '')
