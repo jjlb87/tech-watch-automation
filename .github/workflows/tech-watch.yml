@@ -3,7 +3,7 @@ name: Veille Technologique Automatisée
 on:
   # Exécution chaque lundi à 8h00 (heure UTC, soit 9h en France heure d'hiver, 10h en été)
   schedule:
-    - cron: '0 7 0 * 1'  # Tous les lundis à 8h00 UTC (9h Paris en hiver)
+    - cron: '0 7 * * 1'  # Tous les lundis à 8h00 UTC (9h Paris en hiver)
   
   # Permet l'exécution manuelle depuis l'interface GitHub
   workflow_dispatch:
